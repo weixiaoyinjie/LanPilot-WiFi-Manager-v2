@@ -1,3 +1,4 @@
+
 name: Build LanPilot v2 APK
 
 on:
@@ -20,12 +21,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -f LanPilot-Android-v2.0-Source.zip || { echo 'Missing LanPilot-Android-v2.0-Source.zip at repository root'; exit 1; }
-          unzip -o -q LanPilot-Android-v2.0-Source.zip -d .
+          ZIP='LanPilot-Android-v2.0-Source.zip'
+          test -f "$ZIP" || { echo "Missing $ZIP in repository root"; exit 1; }
+          unzip -o -q "$ZIP" -d .
           test -f settings.gradle
           test -f build.gradle
           test -f app/build.gradle
           test -f app/src/main/java/com/example/lanpilot/MainActivity.java
+          echo 'Project extraction OK'
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -33,13 +36,46 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK 35
+      # Use the Android SDK already installed on the GitHub runner.
+      # Avoid android-actions/setup-android@v3 and sdkmanager downloads,
+      # which caused the previous failure before compilation started.
+      - name: Use preinstalled Android SDK
         shell: bash
         run: |
-          sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0'
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          test -d "$SDK_ROOT/platforms" || { echo 'Android SDK platforms folder is missing'; exit 1; }
+          echo 'Installed platforms:'
+          ls -la "$SDK_ROOT/platforms"
+          echo 'Installed build tools:'
+          ls -la "$SDK_ROOT/build-tools"
+
+          if [ -f "$SDK_ROOT/platforms/android-35/android.jar" ]; then
+            echo 'Using preinstalled Android SDK 35'
+          elif [ -f "$SDK_ROOT/platforms/android-37/android.jar" ] || [ -f "$SDK_ROOT/platforms/android-37.0/android.jar" ]; then
+            if [ ! -e "$SDK_ROOT/platforms/android-37" ]; then
+              sudo ln -s "$SDK_ROOT/platforms/android-37.0" "$SDK_ROOT/platforms/android-37"
+            fi
+            sed -i -E 's/compileSdk[[:space:]]+[0-9]+/compileSdk 37/' app/build.gradle
+            printf '\nandroid.suppressUnsupportedCompileSdk=37\n' >> gradle.properties
+            echo 'Using preinstalled Android SDK 37 instead of downloading SDK 35'
+          else
+            echo 'Neither Android SDK 35 nor SDK 37 is installed'
+            exit 1
+          fi
+
+          if [ -d "$SDK_ROOT/build-tools/35.0.0" ]; then
+            BUILD_TOOLS='35.0.0'
+          elif [ -d "$SDK_ROOT/build-tools/36.0.0" ]; then
+            BUILD_TOOLS='36.0.0'
+          else
+            echo 'Required Android build-tools 35.0.0 / 36.0.0 not found'
+            exit 1
+          fi
+          sed -i "/namespace 'com.example.lanpilot'/a\\    buildToolsVersion '$BUILD_TOOLS'" app/build.gradle
+          echo "Using build-tools $BUILD_TOOLS"
 
       - name: Set up Gradle 8.11.1
         uses: gradle/actions/setup-gradle@v4
